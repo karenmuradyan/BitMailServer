@@ -22,7 +22,10 @@ namespace BitServer
         public string message = string.Empty;
         public string subject = string.Empty;
         public bool onData = false;
+        public bool isCommand = false;
+#if DEBUG
         public bool spam=false;
+#endif
     }
 
     public class BitSettings
@@ -41,6 +44,7 @@ namespace BitServer
 
         private const string EXTENSION = "bitmessage.ch";
         private const string RANDOM = "random@bitmessage.ch";
+        private const string COMMAND = "cmd@bitmessage.ch";
         private const string CONFIG = "BitServer.ini";
 
         private static POP3server Psrv;
@@ -53,13 +57,15 @@ namespace BitServer
         private static SMTPstate SMS;
         
         private static POP3message[] POP3msg;
-
+        private static List<POP3message> AuxMessages;
         private static BitSettings BS;
 
         private static frmLoop GUI;
         private static NotifyIcon NFI;
         private static ContextMenuStrip CMS;
         private static Random R;
+
+        private static int MsgCount = 0;
 
         [STAThread]
         static void Main(string[] args)
@@ -75,6 +81,7 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
                 }
                 else
                 {
+                    AuxMessages = new List<POP3message>();
                     if (BS.Port == -1)
                     {
                         Settings_Click(null, null);
@@ -286,19 +293,150 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
                         }
                         else
                         {
-                            if (BS.StripHdr)
+                            if (SMS.isCommand)
                             {
-                                SMS.message = FilterHeaders(SMS.message);
-                            }
-                            foreach (string s in SMS.to)
-                            {
-                                if (s.ToUpper() == "BROADCAST")
+                                switch (SMS.subject.ToLower().Split(' ')[0])
                                 {
-                                    BitAPIserver.BA.sendBroadcast(SMS.from, B64e(SMS.subject), B64e(SMS.message));
+                                    case "help":
+                                        adminMsg("OK: BMS Help", @"BitMailService Help
+
+Command usage
+-------------
+To use a command, send an E-Mail to cmd@bitmessage.ch
+and write the command in the subject line.
+
+Commands and their arguments
+----------------------------
+> help
+shows this help
+
+> subscribe    <address> [label]
+> sub          <address> [label]
+subscribes to an address
+
+> unsubscribe  <address>
+> usub         <address>
+unsubscribes from an address
+
+> status       <text>
+sets statusbar text
+
+> killall
+deletes all messages from inbox.
+Creful with this command, some E-mail clients get
+confused when messages suddenly disappear
+
+> createAddr   [passphrase]
+creates random or deterministic address.
+If the passphrase is given, a deterministic is generated,
+if not, a random address is created.
+
+> list
+lists all addresses
+
+Response
+--------
+Responses are given in form of a POP3 Message
+A message subject either starts with ERR or OK.
+The body contains detailed informations.
+Respnses are not stored in the application.
+If you quit the B2M exe it will delete the
+config responses. Bitmessages are not deleted.
+
+License
+-------
+B2M - Bitmessage E-Mail gateway
+Copyright (C) 2013  Kevin Gut
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the Do What The Fuck You Want To Public License
+as published by Sam Hocevar, either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+You should have received a copy of the Do What The Fuck You Want To
+Public License along with this program.
+If not, see <http://www.wtfpl.net/txt/copying/>.
+");
+
+                                        break;
+                                    case "status":
+                                        if (SMS.subject.Split(' ').Length > 1)
+                                        {
+                                            BitAPIserver.BA.statusBar(SMS.subject.Split(new char[] { ' ' }, 2)[1]);
+                                            adminMsg("OK: status", "status set to " + SMS.subject.Split(new char[] { ' ' }, 2)[1]);
+                                        }
+                                        else
+                                        {
+                                            adminMsg("ERR: status", "cannot set status. You need to specify the value for it");
+                                        }
+                                        break;
+                                    case "killall":
+                                        adminMsg("ERR: N/A", "This feature is not implemented.");
+                                        break;
+                                    case "createaddr":
+                                        adminMsg("ERR: N/A", "This feature is not implemented.");
+                                        break;
+                                    case "list":
+                                        adminMsg("ERR: N/A", "This feature is not implemented.");
+                                        break;
+                                    case "subscribe":
+                                    case "sub":
+                                        if (SMS.subject.Split(' ').Length >= 2)
+                                        {
+                                            if (SMS.subject.Split(' ').Length > 2)
+                                            {
+                                                BitAPIserver.BA.addSubscription(SMS.subject.Split(' ')[1], B64e(SMS.subject.Split(new char[] { ' ' }, 3)[2]));
+                                            }
+                                            else
+                                            {
+                                                BitAPIserver.BA.addSubscription(SMS.subject.Split(' ')[1], B64e("--NO NAME--"));
+                                            }
+                                            adminMsg("OK: subscribe", "subscribed to " + SMS.subject.Split(' ')[1]);
+                                        }
+                                        else
+                                        {
+                                            adminMsg("ERR: subscribe", "You need to specify an address");
+                                        }
+                                        break;
+                                    case "unsubscribe":
+                                    case "usub":
+                                        if (SMS.subject.Split(' ')[0].Length == 2)
+                                        {
+                                            BitAPIserver.BA.deleteSubscription(SMS.subject.Split(' ')[1]);
+                                            adminMsg("OK: unsubscribe", string.Format("Subscription for {0} deleted",SMS.subject.Split(' ')[1]));
+                                        }
+                                        else
+                                        {
+                                            adminMsg("ERR: unsubscribe", "You need to specify an address");
+                                        }
+                                        break;
+                                    default:
+                                        adminMsg("ERR: unknown command", string.Format(@"The command you used is not valid.
+To get a list of valid commands, use the 'help' command.
+Your command line: {0}",SMS.subject));
+                                        break;
                                 }
-                                else
+                            }
+                            else
+                            {
+                                if (BS.StripHdr)
                                 {
-                                    BitAPIserver.BA.sendMessage(s, SMS.from, B64e(SMS.subject), B64e(SMS.message));
+                                    SMS.message = FilterHeaders(SMS.message);
+                                }
+                                foreach (string s in SMS.to)
+                                {
+                                    if (s.ToUpper() == "BROADCAST")
+                                    {
+                                        BitAPIserver.BA.sendBroadcast(SMS.from, B64e(SMS.subject), B64e(SMS.message));
+                                    }
+                                    else
+                                    {
+                                        BitAPIserver.BA.sendMessage(s, SMS.from, B64e(SMS.subject), B64e(SMS.message));
+                                    }
                                 }
                             }
                             SMTP.msg(250, "This better not be spam!");
@@ -388,6 +526,11 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
                                     SMS.to.Add(addr);
                                     SMTP.msg(250, "I added the address");
                                 }
+                                else if (addr == COMMAND.Split('@')[0])
+                                {
+                                    SMS.isCommand = true;
+                                    SMTP.msg(250, "Give me the damn subject line already");
+                                }
                                 else
                                 {
                                     SMTP.msg(551, "TRY A FUCKING EXTERNAL SERVER OR USE <BITMESSAGE.CH>");
@@ -448,6 +591,20 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
             }
         }
 
+        private static void adminMsg(string subject, string body)
+        {
+            BitMsg BM = new BitMsg();
+            BM.encodingType = 3;
+            BM.fromAddress = "cmd";
+            BM.toAddress = "admin";
+            BM.message = body;
+            BM.subject = subject;
+            BM.receivedTime = (int)DateTime.Now.ToFileTimeUtc();
+            BM.msgid = MsgCount.ToString();
+            MsgCount++;
+            AuxMessages.Add(new POP3message(0, BM));
+        }
+
         private static string stripQuoted(string input)
         {
             var occurences = new Regex(@"=[0-9A-F]{2}", RegexOptions.Multiline);
@@ -457,7 +614,7 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
                 char hexChar = (char)Convert.ToInt32(match.Groups[0].Value.Substring(1), 16);
                 input = input.Replace(match.Groups[0].Value, hexChar.ToString());
             }
-            return input.Replace("=\r\n", "");
+            return input.Replace("=\r\n", "").Replace("= \r\n", "");
         }
 
         protected static string B64e(string p)
@@ -586,12 +743,21 @@ QUIT
                         {
                             long size = 0;
                             int count = 0;
-                            for (int i = 0; i < POP3msg.Length; i++)
+                            int i = 0;
+                            for (i = 0; i < POP3msg.Length; i++)
                             {
                                 if (!POP3msg[i].Deleted)
                                 {
                                     count++;
                                     size += POP3msg[i].Body.Length;
+                                }
+                            }
+                            for (i = 0; i < AuxMessages.Count; i++)
+                            {
+                                if (!AuxMessages[i].Deleted)
+                                {
+                                    count++;
+                                    size += AuxMessages[i].Body.Length;
                                 }
                             }
                             POP3.ok(string.Format("{0} {1}", POP3msg.Length, size));
@@ -601,12 +767,23 @@ QUIT
                         if (P3S.passOK && P3S.userOK)
                         {
                             POP3.ok("INCOMMING MAILS! BITCH");
-                            for (int i = 0; i < POP3msg.Length; i++)
+                            int i = 0;
+                            int j = 0;
+                            for (i = 0; i < POP3msg.Length; i++)
                             {
                                 if (!POP3msg[i].Deleted)
                                 {
                                     POP3.sendRaw(string.Format("{0} {1}\r\n", i + 1, POP3msg[i].Body.Length));
                                 }
+                                j++;
+                            }
+                            for (i = 0; i < AuxMessages.Count; i++)
+                            {
+                                if (!AuxMessages[i].Deleted)
+                                {
+                                    POP3.sendRaw(string.Format("{0} {1}\r\n", j + 1, AuxMessages[i].Body.Length));
+                                }
+                                j++;
                             }
                             POP3.sendRaw(".\r\n");
                         }
@@ -657,6 +834,7 @@ QUIT
                                 }
                                 else
                                 {
+                                    //TODO: Probably AUX message (TOP)
                                     POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                                 }
                             }
@@ -679,8 +857,21 @@ QUIT
                                 POP3.ok("I will take care of it!");
                                 POP3msg[ID - 1].MarkDelete();
                             }
-                            else
+                            else if(int.TryParse(args[0], out ID))
                             {
+                                //shifts the Message ID
+                                ID -= POP3msg.Length;
+                                if (ID <= AuxMessages.Count)
+                                {
+                                    for (int i = 0; i < AuxMessages.Count; i++)
+                                    {
+                                        POP3.ok("I will take care of it!");
+                                        AuxMessages[ID - 1].MarkDelete();
+                                    }
+                                }
+                                else
+                                {
+                                }
                                 POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                             }
                         }
@@ -706,6 +897,7 @@ QUIT
                             }
                             else
                             {
+                                //TODO: AUX Message (RETR)
                                 POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                             }
                         }
@@ -725,6 +917,7 @@ QUIT
                                     BitAPIserver.BA.trashMessage(P.UID);
                                 }
                             }
+                            //TODO: AUX Messages (QUIT)
                         }
                         POP3.close();
                         break;
@@ -741,6 +934,7 @@ QUIT
                                     P.Reset();
                                 }
                             }
+                            //TODO: AUX Message (RSET)
                             POP3.ok("Don't make mistakes in the future!");
                         }
                         else
@@ -763,6 +957,7 @@ QUIT
                                 {
                                     POP3.sendRaw(string.Format("{0} {1}\r\n", i + 1, POP3msg[i].UID));
                                 }
+                                //TODO: AUX Message (UIDL)
                                 POP3.sendRaw(".\r\n");
                             }
                         }

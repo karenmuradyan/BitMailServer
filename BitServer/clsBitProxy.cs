@@ -35,9 +35,9 @@ namespace BitServer
         [XmlRpcMethod]
         void statusBar(string message);
         [XmlRpcMethod]
-        void sendBroadcast(string Addr, string Base64subject, string Base64message);
+        string sendBroadcast(string Addr, string Base64subject, string Base64message);
         [XmlRpcMethod]
-        void sendMessage(string ToAddr,string FromAddr, string Base64subject, string Base64message);
+        string sendMessage(string ToAddr,string FromAddr, string Base64subject, string Base64message);
         [XmlRpcMethod]
         string createRandomAddress(string base64label, bool shortAddr);
         [XmlRpcMethod]
@@ -48,5 +48,11 @@ namespace BitServer
         string createDeterministicAddresses(string base64Password, int numberAddr, int addrVersion, int stream, bool shortAddr);
         [XmlRpcMethod]
         string listAddresses();
+        [XmlRpcMethod]
+        void addSubscription(string addr, string base64Label);
+        [XmlRpcMethod]
+        void deleteSubscription(string addr);
+        [XmlRpcMethod]
+        string getStatus(string ackdata);
     }
 }
