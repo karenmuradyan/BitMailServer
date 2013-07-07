@@ -6,6 +6,7 @@ using System.Drawing;
 using System.Threading;
 using BitServer.Properties;
 using System.Text.RegularExpressions;
+using System.IO;
 
 namespace BitServer
 {
@@ -58,6 +59,7 @@ namespace BitServer
         
         private static POP3message[] POP3msg;
         private static List<POP3message> AuxMessages;
+        private static List<string> AckMessage;
         private static BitSettings BS;
 
         private static frmLoop GUI;
@@ -65,6 +67,9 @@ namespace BitServer
         private static ContextMenuStrip CMS;
         private static Random R;
 
+        private static Thread tDSN;
+
+        private static bool cont;
         private static int MsgCount = 0;
 
         [STAThread]
@@ -82,6 +87,12 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
                 else
                 {
                     AuxMessages = new List<POP3message>();
+                    AckMessage = new List<string>();
+
+                    tDSN = new Thread(new ThreadStart(checkMSG));
+                    tDSN.IsBackground = true;
+                    tDSN.Start();
+
                     if (BS.Port == -1)
                     {
                         Settings_Click(null, null);
@@ -118,12 +129,78 @@ Also verify the API File Path in BitServer.ini is valid.", "Initialization Error
                 Application.Restart();
             }
 
+            cont = false;
+
             Console.WriteLine("Exiting...");
             if (NFI != null)
             {
                 NFI.Visible = false;
                 NFI.Dispose();
                 CMS.Dispose();
+            }
+            tDSN.Join();
+        }
+
+        private static void checkMSG()
+        {
+            if (File.Exists("ack.txt"))
+            {
+                AckMessage.AddRange(File.ReadAllLines("ack.txt"));
+            }
+            cont = true;
+            while (cont)
+            {
+                lock (AckMessage)
+                {
+                    for (int ii = 0; ii < AckMessage.Count; ii++)
+                    {
+                        string[] parts = AckMessage[ii].Split(new char[]{' '},2);
+                        if (parts.Length > 1)
+                        {
+                            switch (BitAPIserver.BA.getStatus(parts[0]).ToLower().Trim())
+                            {
+                                case "notfound":
+                                    adminMsg("ERR: Error sending message.",
+                                        string.Format(@"Your Message '{0}' could not be sent.
+Status: notfound
+You probably tried to send a message to yourself or from an address that is not yours.
+It is also possible, that you deleted the message from the outbox.", parts[1]));
+                                    AckMessage.RemoveAt(ii--);
+                                    break;
+                                case "broadcastsent":
+                                    adminMsg("OK: Broadcast sent",
+                                        string.Format("Your broadcast '{0}' was sent", parts[1]));
+                                    AckMessage.RemoveAt(ii--);
+                                    break;
+                                case "msgsent":
+                                    break;
+                                case "ackreceived":
+                                    adminMsg("OK: Message sent",
+                                        string.Format("Your Message '{0}' was sent and reached its destination.", parts[1]));
+                                    AckMessage.RemoveAt(ii--);
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        else
+                        {
+                            AckMessage.RemoveAt(ii--);
+                        }
+                    }
+                }
+                for (int i = 0; i < 30 && cont; i++)
+                {
+                    Thread.Sleep(1000);
+                }
+                if (File.Exists("ack.txt"))
+                {
+                    File.Delete("ack.txt");
+                }
+                if (AckMessage.Count > 0)
+                {
+                    File.WriteAllLines("ack.txt", AckMessage.ToArray());
+                }
             }
         }
 
@@ -323,25 +400,22 @@ sets statusbar text
 
 > killall
 deletes all messages from inbox.
-Creful with this command, some E-mail clients get
-confused when messages suddenly disappear
+Careful with this command, some E-mail clients get confused when messages suddenly disappear.
 
 > createAddr   [passphrase]
 creates random or deterministic address.
-If the passphrase is given, a deterministic is generated,
+If the passphrase is given, a deterministic address is generated,
 if not, a random address is created.
+The response contains the address in the body.
 
 > list
 lists all addresses
 
 Response
 --------
-Responses are given in form of a POP3 Message
-A message subject either starts with ERR or OK.
-The body contains detailed informations.
-Respnses are not stored in the application.
-If you quit the B2M exe it will delete the
-config responses. Bitmessages are not deleted.
+Responses are given in form of a POP3 Message. A message subject either starts with ERR or OK.
+The body contains detailed informations. Respnses are not stored in the application.
+If you quit the B2M exe it will delete the config responses. Bitmessages are not deleted.
 
 License
 -------
@@ -375,13 +449,31 @@ If not, see <http://www.wtfpl.net/txt/copying/>.
                                         }
                                         break;
                                     case "killall":
-                                        adminMsg("ERR: N/A", "This feature is not implemented.");
+                                        foreach (BitMsg m in Bitmessage.getMessages(BitAPIserver.BA))
+                                        {
+                                            BitAPIserver.BA.trashMessage(m.msgid);
+                                        }
+                                        adminMsg("OK: killall", "All messages deleted.");
                                         break;
                                     case "createaddr":
-                                        adminMsg("ERR: N/A", "This feature is not implemented.");
+                                        if (SMS.subject.Split(' ').Length == 2)
+                                        {
+                                            adminMsg("OK: Address generation", Bitmessage.generateAddress(BitAPIserver.BA, SMS.subject.Split(new char[]{' '},2)[1], "B2M generated addr"));
+                                        }
+                                        else
+                                        {
+                                            adminMsg("OK: Address generation", Bitmessage.generateAddress(BitAPIserver.BA, "B2M generated addr"));
+                                        }
                                         break;
                                     case "list":
-                                        adminMsg("ERR: N/A", "This feature is not implemented.");
+                                        string addrlist = string.Format("{0} {1} Enabled Stream\r\n",
+                                            size("Address",38),size("Label",20));
+                                        foreach (BitAddr a in Bitmessage.getAddresses(BitAPIserver.BA))
+                                        {
+                                            addrlist += string.Format("{0} {1} {2} {3}\r\n",
+                                                size(a.address,38), size(a.label,20), size(a.enabled.ToString(),7), size(a.stream.ToString(),6));
+                                        }
+                                        adminMsg("OK: Address list", addrlist);
                                         break;
                                     case "subscribe":
                                     case "sub":
@@ -404,7 +496,7 @@ If not, see <http://www.wtfpl.net/txt/copying/>.
                                         break;
                                     case "unsubscribe":
                                     case "usub":
-                                        if (SMS.subject.Split(' ')[0].Length == 2)
+                                        if (SMS.subject.Split(' ').Length == 2)
                                         {
                                             BitAPIserver.BA.deleteSubscription(SMS.subject.Split(' ')[1]);
                                             adminMsg("OK: unsubscribe", string.Format("Subscription for {0} deleted",SMS.subject.Split(' ')[1]));
@@ -431,11 +523,11 @@ Your command line: {0}",SMS.subject));
                                 {
                                     if (s.ToUpper() == "BROADCAST")
                                     {
-                                        BitAPIserver.BA.sendBroadcast(SMS.from, B64e(SMS.subject), B64e(SMS.message));
+                                        AckMessage.Add(BitAPIserver.BA.sendBroadcast(SMS.from, B64e(SMS.subject), B64e(SMS.message)));
                                     }
                                     else
                                     {
-                                        BitAPIserver.BA.sendMessage(s, SMS.from, B64e(SMS.subject), B64e(SMS.message));
+                                        AckMessage.Add(BitAPIserver.BA.sendMessage(s, SMS.from, B64e(SMS.subject), B64e(SMS.message)));
                                     }
                                 }
                             }
@@ -520,16 +612,19 @@ Your command line: {0}",SMS.subject));
                         case "RCPT":
                             if (args.Length > 0 && args[0].ToUpper().StartsWith("TO:"))
                             {
-                                string addr;
-                                if (!string.IsNullOrEmpty(addr = check(raw)))
+                                string addr = check(raw);
+                                if (!string.IsNullOrEmpty(addr))
                                 {
-                                    SMS.to.Add(addr);
-                                    SMTP.msg(250, "I added the address");
-                                }
-                                else if (addr == COMMAND.Split('@')[0])
-                                {
-                                    SMS.isCommand = true;
-                                    SMTP.msg(250, "Give me the damn subject line already");
+                                    if (addr == COMMAND.Split('@')[0])
+                                    {
+                                        SMS.isCommand = true;
+                                        SMTP.msg(250, "Give me the damn subject line already");
+                                    }
+                                    else
+                                    {
+                                        SMS.to.Add(addr);
+                                        SMTP.msg(250, "I added the address");
+                                    }
                                 }
                                 else
                                 {
@@ -543,7 +638,7 @@ Your command line: {0}",SMS.subject));
                             }
                             break;
                         case "DATA":
-                            if (!string.IsNullOrEmpty(SMS.from) && SMS.to.Count > 0)
+                            if (!string.IsNullOrEmpty(SMS.from) && (SMS.to.Count > 0 || SMS.isCommand))
                             {
                                 SMS.onData = true;
                                 SMTP.dataMode = true;
@@ -760,7 +855,7 @@ QUIT
                                     size += AuxMessages[i].Body.Length;
                                 }
                             }
-                            POP3.ok(string.Format("{0} {1}", POP3msg.Length, size));
+                            POP3.ok(string.Format("{0} {1}", POP3msg.Length+AuxMessages.Count, size));
                         }
                         break;
                     case "LIST":
@@ -832,9 +927,35 @@ QUIT
                                     }
                                     POP3.sendRaw("\r\n.\r\n");
                                 }
+                                else if (int.TryParse(args[0], out i) && i > 0 && i-POP3msg.Length <= AuxMessages.Count)
+                                {
+                                    i -= POP3msg.Length;
+                                    POP3.ok("listen carefully!");
+                                    bool countlines = false;
+                                    foreach (string s in AuxMessages[i - 1].Body.Split('\n'))
+                                    {
+                                        if (s.Trim() == string.Empty && !countlines)
+                                        {
+                                            countlines = true;
+                                            POP3.sendRaw("\r\n");
+                                        }
+                                        else
+                                        {
+                                            if (!countlines)
+                                            {
+                                                POP3.sendRaw(s.TrimEnd() + "\r\n");
+                                            }
+                                            else if (linesHeader > 0)
+                                            {
+                                                linesHeader--;
+                                                POP3.sendRaw(s.TrimEnd() + "\r\n");
+                                            }
+                                        }
+                                    }
+                                    POP3.sendRaw("\r\n.\r\n");
+                                }
                                 else
                                 {
-                                    //TODO: Probably AUX message (TOP)
                                     POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                                 }
                             }
@@ -871,8 +992,8 @@ QUIT
                                 }
                                 else
                                 {
+                                    POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                                 }
-                                POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                             }
                         }
                         else
@@ -895,9 +1016,14 @@ QUIT
                                 POP3.ok("listen carefully!");
                                 POP3.sendRaw(POP3msg[ID - 1].Body + "\r\n.\r\n");
                             }
+                            else if (args.Length == 1 && int.TryParse(args[0], out ID) && ID > 0 && ID <= POP3msg.Length + AuxMessages.Count && !AuxMessages[ID - 1 - (POP3msg.Length)].Deleted)
+                            {
+                                ID -= POP3msg.Length;
+                                POP3.ok("listen carefully!");
+                                POP3.sendRaw(AuxMessages[ID - 1].Body + "\r\n.\r\n");
+                            }
                             else
                             {
-                                //TODO: AUX Message (RETR)
                                 POP3.err("I DO NOT HAVE YOUR STUFF!", false);
                             }
                         }
@@ -917,7 +1043,13 @@ QUIT
                                     BitAPIserver.BA.trashMessage(P.UID);
                                 }
                             }
-                            //TODO: AUX Messages (QUIT)
+                            for (int i = 0; i < AuxMessages.Count; i++)
+                            {
+                                if (AuxMessages[i].Deleted)
+                                {
+                                    AuxMessages.RemoveAt(i--);
+                                }
+                            }
                         }
                         POP3.close();
                         break;
@@ -934,7 +1066,10 @@ QUIT
                                     P.Reset();
                                 }
                             }
-                            //TODO: AUX Message (RSET)
+                            for (int i = 0; i < AuxMessages.Count; i++)
+                            {
+                                AuxMessages[i].Reset();
+                            }
                             POP3.ok("Don't make mistakes in the future!");
                         }
                         else
@@ -953,11 +1088,18 @@ QUIT
                             else
                             {
                                 POP3.ok("Here you go!");
-                                for (int i = 0; i < POP3msg.Length; i++)
+                                int i = 0;
+                                int j = 0;
+                                for (i = 0; i < POP3msg.Length; i++)
                                 {
-                                    POP3.sendRaw(string.Format("{0} {1}\r\n", i + 1, POP3msg[i].UID));
+                                    j++;
+                                    POP3.sendRaw(string.Format("{0} {1}\r\n", j, POP3msg[i].UID));
                                 }
-                                //TODO: AUX Message (UIDL)
+                                for (i = 0; i < AuxMessages.Count; i++)
+                                {
+                                    j++;
+                                    POP3.sendRaw(string.Format("{0} {1}\r\n", j, AuxMessages[i].UID));
+                                }
                                 POP3.sendRaw(".\r\n");
                             }
                         }
@@ -1004,6 +1146,29 @@ QUIT
             }
             */
             return retValue;
+        }
+
+        private static string size(string s, int l)
+        {
+            if (s.Length > l)
+            {
+                if (l > 3)
+                {
+                    s=s.Substring(0, l - 3) + "...";
+                }
+                else
+                {
+                    s=s.Substring(0, l);
+                }
+            }
+            else if (s.Length<l)
+            {
+                while (s.Length < l)
+                {
+                    s += " ";
+                }
+            }
+            return s;
         }
     }
 }

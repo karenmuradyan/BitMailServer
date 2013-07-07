@@ -64,6 +64,7 @@ namespace BitServer
         /// Generates a BitMessage Address
         /// </summary>
         /// <param name="BA">API</param>
+        /// <param name="label">Address label</param>
         /// <returns>Bitmessage Address</returns>
         public static string generateAddress(BitAPI BA,string label)
         {
@@ -74,6 +75,25 @@ namespace BitServer
             }
             return BA.createRandomAddress(B64enc(label), false);
         }
+
+
+        /// <summary>
+        /// Generates a deterministic BitMessage Address
+        /// </summary>
+        /// <param name="BA">API</param>
+        /// <param name="passphrase">Passphrase</param>
+        /// <param name="label">Address label</param>
+        /// <returns>Bitmessage Address</returns>
+        public static string generateAddress(BitAPI BA,string passphrase, string label)
+        {
+            if (string.IsNullOrEmpty(label))
+            {
+                var dt = DateTime.Now;
+                label = "GENADDR-" + dt.ToShortDateString() + ";" + dt.ToShortTimeString();
+            }
+            return BA.createDeterministicAddresses(B64enc(passphrase), 1, 3, 1, false);
+        }
+
 
         /// <summary>
         /// Returns the bitmessage address, BROADCAST or null if invalid address.
